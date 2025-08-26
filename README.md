@@ -1,8 +1,8 @@
-# Lockin OS (minimal text shell)
+# Lockin OS
 
 A tiny 16-bit real-mode OS that boots from a floppy image and provides a simple command shell.
 
-This is educational and intentionally simple. No filesystems, just a boot sector loader and a small kernel loaded from the first track.
+This is intentionally simple. MInimal filesystems, just a boot sector loader and a small kernel loaded from the first track.
 
 ## Requirements
 
