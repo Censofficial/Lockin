@@ -27,37 +27,5 @@ This produces `build/lockinos.img` (1.44MB floppy image).
 qemu-system-i386 -fda .\build\lockinos.img
 ```
 
-You should see a prompt:
 
-```
-Lockin OS shell ready. Type 'help'
-> 
-```
 
-Supported commands:
-
-- help
-- whoami
-- date
-- uptime
-- about
-- beep
-- echo X
-- color XY (hex attribute like 1E)
-- pwd
-- ls
-- cd NAME | cd .. | cd /
-- mkdir NAME
-- rmdir NAME (only if empty)
-- touch NAME
-- rm NAME
-- cat NAME (stub: no file contents yet)
-- clear
-- shutdown | halt
-- restart | reboot
-
-## Notes
-
-- The bootloader loads at most 32 sectors (16 KiB) of kernel from the first track (contiguous after the boot sector). The build script enforces this size limit.
-- No filesystem is used; the kernel is placed immediately after the boot sector inside the floppy image.
-- Creating an ISO is unnecessary; most emulators/VMs boot floppy images directly. If you later want an ISO, we can add a tiny El Torito boot image wrapper.
