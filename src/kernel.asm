@@ -5,6 +5,15 @@
 BITS 16
 ORG 0x0000
 
+; -------- Constants (must be defined before use) --------
+CMD_BUF_SIZE       equ 128
+MAX_DIRS           equ 32
+NAME_LEN           equ 11      ; 10 chars + null
+MAX_FILES          equ 64
+FILE_CONTENT_SIZE  equ 64
+STARTUP_CYCLES     equ 3
+STARTUP_DOT_TICKS  equ 6
+
 start:
   ; Setup segments
   mov ax, cs
@@ -14,14 +23,13 @@ start:
   mov ss, ax
   mov sp, 0xFFFE
 
-  ; Clear screen
-  call cls
+  ; Boot menu first: choose between BIOS screen and Boot
+  call show_boot_menu
 
-  ; Startup animation before banner
-  call show_startup
-
-  ; Banner
+  ; After Boot was chosen and loading delay shown, display banner
   mov si, msg_banner
+  call puts
+  mov si, msg_loaded
   call puts
 
   ; Capture boot ticks (CX:DX) using BIOS TOD (AH=00h)
@@ -55,63 +63,152 @@ shell_loop:
   ; If empty line, reprompt
   cmp byte [si], 0
   je shell_loop
-  ; Check commands (case-insensitive)
+  ; Check commands (case-insensitive; allow trailing spaces/args)
+  ; help
   mov si, cmd_help
   mov di, [cmdptr]
-  call streq_ci
-  jc .do_help
-
+  mov cx, 4
+  call strncasecmp_ci
+  jnc .chk_whoami
+  mov di, [cmdptr]
+  add di, 4
+  mov al, [di]
+  cmp al, 0
+  je .do_help
+  cmp al, ' '
+  je .do_help
+.chk_whoami:
   mov si, cmd_whoami
   mov di, [cmdptr]
-  call streq_ci
-  jc .do_whoami
-
+  mov cx, 6
+  call strncasecmp_ci
+  jnc .chk_date
+  mov di, [cmdptr]
+  add di, 6
+  mov al, [di]
+  cmp al, 0
+  je .do_whoami
+  cmp al, ' '
+  je .do_whoami
+.chk_date:
   mov si, cmd_date
   mov di, [cmdptr]
-  call streq_ci
-  jc .do_date
-
+  mov cx, 4
+  call strncasecmp_ci
+  jnc .chk_uptime
+  mov di, [cmdptr]
+  add di, 4
+  mov al, [di]
+  cmp al, 0
+  je .do_date
+  cmp al, ' '
+  je .do_date
+.chk_uptime:
   mov si, cmd_uptime
   mov di, [cmdptr]
-  call streq_ci
-  jc .do_uptime
-
+  mov cx, 6
+  call strncasecmp_ci
+  jnc .chk_about
+  mov di, [cmdptr]
+  add di, 6
+  mov al, [di]
+  cmp al, 0
+  je .do_uptime
+  cmp al, ' '
+  je .do_uptime
   ; 'ver' and 'info' removed; use 'about'
+.chk_about:
   mov si, cmd_about
   mov di, [cmdptr]
-  call streq_ci
-  jc .do_about
-
+  mov cx, 5
+  call strncasecmp_ci
+  jnc .chk_beep
+  mov di, [cmdptr]
+  add di, 5
+  mov al, [di]
+  cmp al, 0
+  je .do_about
+  cmp al, ' '
+  je .do_about
+.chk_beep:
   mov si, cmd_beep
   mov di, [cmdptr]
-  call streq_ci
-  jc .do_beep
-
+  mov cx, 4
+  call strncasecmp_ci
+  jnc .chk_clear
+  mov di, [cmdptr]
+  add di, 4
+  mov al, [di]
+  cmp al, 0
+  je .do_beep
+  cmp al, ' '
+  je .do_beep
+.chk_clear:
   mov si, cmd_clear
   mov di, [cmdptr]
-  call streq_ci
-  jc .do_clear
-
+  mov cx, 5
+  call strncasecmp_ci
+  jnc .chk_halt
+  mov di, [cmdptr]
+  add di, 5
+  mov al, [di]
+  cmp al, 0
+  je .do_clear
+  cmp al, ' '
+  je .do_clear
+.chk_halt:
   mov si, cmd_halt
   mov di, [cmdptr]
-  call streq_ci
-  jc .do_halt
-
+  mov cx, 4
+  call strncasecmp_ci
+  jnc .chk_shutdown
+  mov di, [cmdptr]
+  add di, 4
+  mov al, [di]
+  cmp al, 0
+  je .do_halt
+  cmp al, ' '
+  je .do_halt
+.chk_shutdown:
   mov si, cmd_shutdown
   mov di, [cmdptr]
-  call streq_ci
-  jc .do_halt
-
+  mov cx, 8
+  call strncasecmp_ci
+  jnc .chk_reboot
+  mov di, [cmdptr]
+  add di, 8
+  mov al, [di]
+  cmp al, 0
+  je .do_halt
+  cmp al, ' '
+  je .do_halt
+.chk_reboot:
   mov si, cmd_reboot
   mov di, [cmdptr]
-  call streq_ci
-  jc .do_reboot
-
+  mov cx, 6
+  call strncasecmp_ci
+  jnc .chk_restart
+  mov di, [cmdptr]
+  add di, 6
+  mov al, [di]
+  cmp al, 0
+  je .do_reboot
+  cmp al, ' '
+  je .do_reboot
+.chk_restart:
   mov si, cmd_restart
   mov di, [cmdptr]
-  call streq_ci
-  jc .do_reboot
-
+  mov cx, 7
+  call strncasecmp_ci
+  jnc .after_simple
+  mov di, [cmdptr]
+  add di, 7
+  mov al, [di]
+  cmp al, 0
+  je .do_reboot
+  cmp al, ' '
+  je .do_reboot
+.after_simple:
   mov si, cmd_echo
   mov di, [cmdptr]
   mov cx, 5
@@ -179,6 +276,60 @@ shell_loop:
 
   ; Unknown command
   mov si, msg_unknown
+  call puts
+  jmp shell_loop
+
+  ; ----- missing command handlers (stubs) -----
+.do_uptime:
+  mov si, msg_not_impl
+  call puts
+  jmp shell_loop
+
+.do_about:
+  mov si, msg_banner
+  call puts
+  jmp shell_loop
+
+.do_beep:
+  mov ah, 0x0E
+  mov bh, 0x00
+  mov bl, [text_attr]
+  mov al, 7           ; BEL
+  int 0x10
+  jmp shell_loop
+
+.do_clear:
+  call cls
+  jmp shell_loop
+
+.do_halt:
+  mov si, msg_halt
+  call puts
+  cli
+.halt_loop:
+  hlt
+  jmp .halt_loop
+
+.do_reboot:
+  mov si, msg_reboot
+  call puts
+  int 0x19
+  jmp shell_loop
+
+.do_echo:
+  mov si, [cmdptr]
+  add si, 5
+  call skip_spaces
+  call puts
+  jmp shell_loop
+
+.do_color:
+  mov si, msg_not_impl
+  call puts
+  jmp shell_loop
+
+.do_write:
+  mov si, msg_not_impl
   call puts
   jmp shell_loop
 
@@ -568,1299 +719,126 @@ shell_loop:
   call puts
   jmp shell_loop
 
-.do_uptime:
-  ; Get current ticks CX:DX, compute delta from boot_ticks
-  xor ax, ax
-  int 0x1A
-  ; delta = (CX:DX) - (boot_ticks_hi:boot_ticks_lo)
-  sub dx, [boot_ticks_lo]
-  sbb cx, [boot_ticks_hi]
-  ; Convert to seconds: delta / 18 (approx)
-  xor ax, ax        ; AX will hold seconds
-  mov bx, 18
-.upt_loop:
-  ; compare CX:DX with 0
-  mov si, cx
-  or si, dx
-  jz .upt_done
-  ; if CX:DX < 18 then done
-  cmp cx, 0
-  jne .upt_ge
-  cmp dx, bx
-  jb .upt_done
-.upt_ge:
-  ; subtract 18 from DX (low word), borrow from CX
-  sub dx, bx
-  sbb cx, 0
-  inc ax
-  jmp .upt_loop
-.upt_done:
-  ; Print 'Uptime: ' and seconds 's'
-  mov si, msg_uptime
-  call puts_raw
-  push ax
-  call print_uint16
-  mov si, letter_s
-  call puts_raw
-  ; print human-readable form: (H:M:S)
-  mov si, space
-  call puts_raw
-  mov si, lparen
-  call puts_raw
-  ; retrieve seconds
-  pop ax
-  xor dx, dx
-  mov bx, 3600
-  div bx                 ; AX=H, DX=rem
-  push ax                ; save H
-  mov ax, dx             ; rem
-  xor dx, dx
-  mov bx, 60
-  div bx                 ; AX=M, DX=S
-  ; print H
-  pop cx
-  mov ax, cx
-  call print_uint16
-  mov si, colon
-  call puts_raw
-  ; print M
-  ; AX already M
-  call print_uint16
-  mov si, colon
-  call puts_raw
-  ; print S
-  mov ax, dx
-  call print_uint16
-  mov si, rparen
-  call puts
-  jmp shell_loop
-
-.do_about:
-  mov si, msg_about
-  call puts
-  jmp shell_loop
-
-.do_beep:
-  ; ASCII bell
-  mov ah, 0x0E
-  mov bh, 0x00
-  mov bl, [text_attr]
-  mov al, 7
-  int 0x10
-  ; newline
-  mov ax, 0x0E0D
-  mov bx, 0x0000
-  mov bl, [text_attr]
-  int 0x10
-  mov al, 0x0A
-  int 0x10
-  jmp shell_loop
-
-.do_halt:
-  cli
-.halt_loop:
-  hlt
-  jmp .halt_loop
-
-.do_reboot:
-  ; Try warm boot via BIOS
-  int 0x19
-  jmp .do_halt
-
-.do_echo:
-  ; Skip "echo " (5 bytes) and print remainder until 0
-  mov si, [cmdptr]
-  add si, 5
-  call puts
-  jmp shell_loop
-
-.do_color:
-  ; Expect two hex digits after optional spaces: color XY
-  mov si, [cmdptr]
-  add si, 6
-  call skip_spaces
-  ; Need at least two chars
-  push si
-  lodsb
-  test al, al
-  jz .color_usage_pop
-  lodsb
-  test al, al
-  jz .color_usage_pop
-  ; Back SI to start of two digits
-  pop si
-  call parse_hex_byte ; AL=val, CF=1 ok
-  jnc .color_usage
-  mov [text_attr], al
-  ; Recolor existing screen with the new attribute
-  call repaint_screen
-  mov si, msg_color_set
-  call puts
-  jmp shell_loop
-.color_usage:
-  mov si, msg_color_usage
-  call puts
-  jmp shell_loop
-; ensure SI stack balance on early usage branch
-.color_usage_pop:
-  pop si
-  jmp .color_usage
-
-; clear screen handler
-.do_clear:
+; draw_menu: draw boot menu
+draw_menu:
+  pusha
+  ; clear screen
   call cls
-  jmp shell_loop
-
-.do_write:
-  ; Parse: write NAME TEXT... (create if not exists, overwrite content)
-  mov si, [cmdptr]
-  add si, 6
-  call skip_spaces
-  ; first token is NAME -> temp_name
-  call token_to_temp
-  jnc .write_usage
-  ; SI now at after NAME, can point to TEXT after skipping spaces
-  call skip_spaces
-  ; Find or create file under current_dir
-  mov bl, [current_dir]
-  call find_file_child
-  jc .write_have_index
-  ; not found -> create
-  call alloc_file
-  jnc .write_no_space
-  mov bl, al
-  mov byte [file_used+bx], 1
-  mov al, [current_dir]
-  mov [file_parent+bx], al
-  call copy_temp_to_file
-.write_have_index:
-  ; BL must be file index
-  ; Copy TEXT (at DS:SI) into file data up to FILE_CONTENT_SIZE
-  push si
-  push bx
-  call file_data_ptr    ; SI -> data buffer
-  mov di, si            ; DI = dest
-  pop bx
-  pop si                ; SI = source text
-  mov cx, FILE_CONTENT_SIZE
-  xor ah, ah            ; count actually written in AH
-.w_copy:
-  cmp cx, 0
-  je .w_done_copy
-  ; Stop if end of line (0 encountered). Our line buffer is 0-terminated.
-  mov al, [si]
-  cmp al, 0
-  je .w_done_copy
-  ; store and advance
-  stosb
-  inc si
-  inc ah
-  dec cx
-  jmp .w_copy
-.w_done_copy:
-  ; Update size
-  mov si, file_size
-  xor bh, bh
-  add si, bx
-  mov [si], ah
-  mov si, msg_ok
-  call puts
-  jmp shell_loop
-.write_no_space:
-  mov si, msg_full
-  call puts
-  jmp shell_loop
-.write_usage:
-  mov si, msg_write_usage
-  call puts
-  jmp shell_loop
-
-; wait_ticks: wait AL BIOS ticks (~18.2 Hz)
-wait_ticks:
+  ; Title centered-ish with inverse bar
+  mov ah, 0x02
+  mov bh, 0x00
+  mov dx, (3<<8) | 20
+  int 0x10
+  ; swap attr -> highlight
   push ax
-  push bx
-  push cx
-  push dx
-  xor ah, ah
-  int 0x1A          ; CX:DX current ticks, we use DX
-  mov bx, dx        ; start
-.wt_loop:
-  xor ah, ah
-  int 0x1A
-  mov cx, dx
-  sub cx, bx        ; elapsed (wrap ignored for small waits)
-  cmp cl, al        ; compare low byte
-  jb .wt_loop
-  pop dx
-  pop cx
-  pop bx
-  pop ax
-  ret
-
-; ensure_col0: if cursor column != 0, move to next line (using newline)
-ensure_col0:
-  pusha
-  mov ah, 0x03
-  mov bh, 0x00
-  int 0x10
-  cmp dl, 0
-  je .ok
-  ; Force cursor to column 0 on the same row
-  mov ah, 0x02
-  mov bh, 0x00
-  xor dl, dl          ; col 0
-  int 0x10
-.ok:
-  popa
-  ret
-
-; show_startup: prints startup text and animates three dots appearing/disappearing
-show_startup:
-  pusha
-  mov si, msg_startup
-  call puts_raw
-  ; two cycles of appear 3 dots then erase 3 dots
-  mov bp, STARTUP_CYCLES
-.cycle:
-  ; appear 3 dots
-  mov cx, 3
-.appear:
-  mov ah, 0x0E
-  mov bh, 0x00
-  mov bl, [text_attr]
-  mov al, '.'
-  int 0x10
-  mov al, STARTUP_DOT_TICKS
-  call wait_ticks
-  loop .appear
-  ; erase 3 dots (backspace-space-backspace)
-  mov cx, 3
-.erase:
-  mov ah, 0x0E
-  mov al, 8          ; BS
-  mov bh, 0x00
-  mov bl, [text_attr]
-  int 0x10
-  mov al, ' '
-  int 0x10
-  mov al, 8
-  int 0x10
-  mov al, STARTUP_DOT_TICKS
-  call wait_ticks
-  loop .erase
-  dec bp
-  jnz .cycle
-  ; clear screen after animation so startup text doesn't persist
-  call cls
-  popa
-  ret
-
-; newline: advance to next line honoring current text_attr and custom scroll
-newline:
-  pusha
-  ; Get cursor position
-  mov ah, 0x03
-  mov bh, 0x00
-  int 0x10              ; DH=row (0-24), DL=col
-.nl_check_last:
-  cmp dh, 24
-  jb .nl_move_next
-  ; At last row: perform scroll up 1 line with our attribute
-  mov ax, 0x0601        ; AH=06 scroll up, AL=1 line
-  mov bh, [text_attr]   ; fill attribute
-  mov cx, 0x0000        ; top-left
-  mov dx, 0x184F        ; bottom-right
-  int 0x10
-  ; Move cursor to col 0 of last row
-  mov ah, 0x02
-  mov bh, 0x00
-  mov dx, 0x1840        ; row 24, col 0
-  int 0x10
-  jmp .nl_done
-.nl_move_next:
-  ; Move cursor explicitly to next line, col 0
-  inc dh                 ; next row
-  mov dl, 0              ; col 0
-  mov ah, 0x02
-  mov bh, 0x00
-  int 0x10
-.nl_done:
-  popa
-  ret
-
-; puts: print 0-terminated string at DS:SI, then CRLF
-puts:
-  pusha
-  call puts_raw
-  ; Clear remainder of the line to avoid leftover characters from previous content
-  call clear_eol
-  call newline
-  popa
-  ret
-
-; puts_raw: print 0-terminated string without CRLF
-puts_raw:
-  pusha
-.pr:
-  lodsb
-  test al, al
-  jz .prd
-  mov ah, 0x0E
-  mov bh, 0x00
-  mov bl, [text_attr]
-  int 0x10
-  jmp .pr
-.prd:
-  popa
-  ret
-
-; clear_eol: clear from current cursor position to end of line using current text_attr
-clear_eol:
-  pusha
-  ; Get current cursor position -> DL = col
-  mov ah, 0x03
-  mov bh, 0x00
-  int 0x10
-  ; CX = 80 - DL
-  xor cx, cx
-  mov cl, 80
-  sub cl, dl
-  jz .ce_done
-  ; Write spaces with attribute, count in CX
-  mov ah, 0x09
-  mov al, ' '
-  mov bh, 0x00
-  mov bl, [text_attr]
-  int 0x10
-.ce_done:
-  popa
-  ret
-
-; puts_lines: print sequence of 0-terminated strings at DS:SI until an extra 0 byte
-; Layout: "line1",0,"line2",0,...,0
-puts_lines:
-  pusha
-.pl_loop:
-  cmp byte [si], 0
-  je .pl_done
-  ; Save start of this line
-  mov di, si
-  ; Anchor each line to column 0 before printing
-  call ensure_col0
-  call puts_raw
-  call clear_eol
-  call newline
-  ; Restore start into SI, then advance to next string (past terminating 0)
-  mov si, di
-.pl_advance:
-  lodsb
-  test al, al
-  jnz .pl_advance
-  jmp .pl_loop
-.pl_done:
-  popa
-  ret
-
-; cls: clear screen using BIOS scroll up function
-cls:
-  pusha
-  mov ax, 0x0600
-  mov bh, [text_attr]
-  mov cx, 0x0000
-  mov dx, 0x184F
-  int 0x10
-  ; Move cursor to 0,0
-  mov ah, 0x02
-  mov bh, 0x00
-  mov dx, 0x0000
-  int 0x10
-  popa
-  ret
-
-; repaint_screen: set attribute of all 80x25 cells to current text_attr, preserving characters
-repaint_screen:
-  pusha
-  push ds
-  push es
-  ; Save current cursor position (DH=row, DL=col)
-  mov ah, 0x03
-  mov bh, 0x00
-  int 0x10
-  push dx                 ; save cursor pos
-  mov ax, 0xB800
-  mov es, ax
-  xor di, di
-  cld
-  mov cx, 2000          ; 80*25 cells
-.rs_loop:
-  ; Skip character byte
-  inc di
-  ; Write attribute
   mov al, [text_attr]
-  stosb                 ; store at ES:DI, then DI++ (attributes position)
-  ; Next cell
-  loop .rs_loop
-  ; Restore cursor position
-  pop dx
+  push ax
+  mov byte [text_attr], 0x70
+  mov si, msg_menu_title
+  call puts_raw
+  pop ax
+  mov [text_attr], al
+  pop ax
+  ; Box (wider and centered)
   mov ah, 0x02
   mov bh, 0x00
+  mov dx, (9<<8) | 16
   int 0x10
-  pop es
-  pop ds
-  popa
-  ret
-
-; readline: reads a line into ES:DI? We'll use DS:DI, max length in CX. Null-terminated.
-; Simple editing: backspace, enter; echoes characters.
-readline:
-  pusha
-  ; We'll keep pointer in DI, count in CX
-  xor ax, ax
-  mov [rl_start], di     ; remember buffer start safely
-.rl_loop:
-  ; get key
-  xor ax, ax
-  int 0x16       ; AH=0, wait keystroke -> AL
-  cmp al, 13     ; Enter
-  je .enter
-  cmp al, 8      ; Backspace
-  je .backspace
-  cmp al, 27     ; ESC -> clear line
-  je .esc
-  ; printable?
-  cmp al, ' '
-  jb .rl_loop
-  ; If buffer full (leave space for null)
-  cmp cx, 1
-  jbe .rl_loop
-  ; store and echo
-  stosb
-  dec cx
-  ; echo char
-  mov ah, 0x0E
-  mov bh, 0x00
-  mov bl, [text_attr]
-  int 0x10
-  jmp .rl_loop
-
-.backspace:
-  mov ax, [rl_start]
-  cmp di, ax
-  jbe .rl_loop
-  dec di
-  inc cx
-  ; move cursor back and erase char visually
-  mov ah, 0x0E
-  mov al, 8
-  mov bh, 0x00
-  mov bl, [text_attr]
-  int 0x10
-  mov al, ' '
-  int 0x10
-  mov al, 8
-  int 0x10
-  jmp .rl_loop
-
-.esc:
-  ; Clear current line: move cursor to col 0, print CR, then spaces
-  ; Simpler: emit CRLF and reprint prompt
-  call newline
-  ; Reset DI and CX
-  mov di, [rl_start]
-  mov cx, CMD_BUF_SIZE
-  ; Reprint prompt
-  mov si, msg_prompt
+  mov si, msg_box_top
   call puts_raw
-  jmp .rl_loop
-
-.enter:
-  ; Null-terminate
-  mov al, 0
-  stosb
-  ; Newline
-  call newline
-  popa
-  ret
-
-; streq: compare DS:SI and DS:DI strings for equality (0-terminated)
-; sets CF=1 if equal, CF=0 if not
-streq:
-  push ax
-  push si
-  push di
-.cmp:
-  lodsb
-  scasb
-  jne .noteq
-  test al, al
-  jnz .cmp
-  ; both zero at same time -> equal
-  stc
-  jmp .done
-.noteq:
-  clc
-.done:
-  pop di
-  pop si
-  pop ax
-  ret
-
-; strncmp: compare first CX bytes of DS:SI and DS:DI; sets CF=1 if equal
-strncmp:
-  push ax
-  push si
-  push di
-.cmpn:
-  cmp cx, 0
-  je .eq
-  mov al, [si]
-  mov ah, [di]
-  cmp al, ah
-  jne .noteq
-  inc si
-  inc di
-  dec cx
-  jmp .cmpn
-.eq:
-  stc
-  jmp .dn
-.noteq:
-  clc
-.dn:
-  pop di
-  pop si
-  pop ax
-  ret
-
-; print_bcd2: print 2 digits from BCD byte in AL
-print_bcd2:
-  push ax
-  push bx
-  push dx
-  mov dl, al
-  ; high nibble
-  mov al, dl
-  and al, 0xF0
-  shr al, 4
-  add al, '0'
-  mov ah, 0x0E
-  mov bh, 0x00
-  mov bl, [text_attr]
+  mov ah, 0x02
+  mov dx, (10<<8) | 16
   int 0x10
-  ; low nibble
-  mov al, dl
-  and al, 0x0F
-  add al, '0'
-  mov ah, 0x0E
-  mov bh, 0x00
-  mov bl, [text_attr]
-  int 0x10
-  pop dx
-  pop bx
-  pop ax
-  ret
-
-; print_uint16: print AX as unsigned decimal
-print_uint16:
-  push ax
-  push bx
-  push cx
-  push dx
-  mov cx, 0           ; digit count
-.pu_loop:
-  mov dx, 0
-  mov bx, 10
-  div bx              ; AX/=10, remainder in DX
-  push dx             ; push remainder digit
-  inc cx
-  test ax, ax
-  jnz .pu_loop
-  ; print digits
-.pu_print:
-  pop dx
-  add dl, '0'
-  mov al, dl
-  mov ah, 0x0E
-  mov bh, 0x00
-  mov bl, [text_attr]
-  int 0x10
-  loop .pu_print
-  pop dx
-  pop cx
-  pop bx
-  pop ax
-  ret
-
-; skip_spaces: advance SI over spaces and tabs
-skip_spaces:
-  push ax
-.ss_loop:
-  mov al, [si]
-  cmp al, ' '
-  je .next
-  cmp al, 9
-  jne .done
-.next:
-  inc si
-  jmp .ss_loop
-.done:
-  pop ax
-  ret
-
-; tolower_al: convert AL to lowercase if 'A'-'Z'
-tolower_al:
-  cmp al, 'A'
-  jb .tl_end
-  cmp al, 'Z'
-  ja .tl_end
-  add al, 32
-.tl_end:
-  ret
-
-; streq_ci: case-insensitive strcmp(SI, DI). CF=1 if equal
-streq_ci:
-  push si
-  push di
-.se_loop:
-  mov al, [si]
-  call tolower_al       ; AL = lower(SI)
-  mov ah, [di]
-  xchg al, ah           ; AH = lower(SI), AL = [DI]
-  call tolower_al       ; AL = lower(DI)
-  cmp ah, al
-  jne .se_ne
-  test ah, ah
-  jz .se_eq
-  inc si
-  inc di
-  jmp .se_loop
-.se_eq:
-  stc
-  jmp .se_out
-.se_ne:
-  clc
-.se_out:
-  pop di
-  pop si
-  ret
-
-; strncasecmp_ci: compare up to CX bytes SI vs DI, case-insensitive. CF=1 if equal prefix
-strncasecmp_ci:
-  push si
-  push di
-  push cx
-.sn_loop:
-  cmp cx, 0
-  je .sn_eq
-  mov al, [si]
-  call tolower_al       ; AL = lower(SI)
-  mov ah, [di]
-  xchg al, ah           ; AH = lower(SI), AL = [DI]
-  call tolower_al       ; AL = lower(DI)
-  cmp ah, al
-  jne .sn_ne
-  inc si
-  inc di
-  dec cx
-  jmp .sn_loop
-.sn_eq:
-  stc
-  jmp .sn_out
-.sn_ne:
-  clc
-.sn_out:
-  pop cx
-  pop di
-  pop si
-  ret
-
-; parse_hex_byte: parse two hex digits at DS:SI -> AL, CF=1 on success; SI += 2
-parse_hex_byte:
-  push bx
-  push dx
-  xor ax, ax
-  mov bl, [si]
-  call hex_nibble
-  jnc .fail
-  shl al, 4
-  inc si
-  mov dl, al
-  mov bl, [si]
-  call hex_nibble
-  jnc .fail
-  inc si
-  or al, dl
-  stc
-  jmp .out
-.fail:
-  clc
-.out:
-  pop dx
-  pop bx
-  ret
-
-; ----------------------------------------
-; RAM directory system (very simple)
-; ----------------------------------------
-; Constants
-MAX_DIRS  equ 32
-NAME_LEN  equ 11   ; max 10 chars + null
-MAX_FILES equ 64
-FILE_CONTENT_SIZE equ 64
-
-; dirs_init: set up root directory and clear others
-dirs_init:
-  pusha
-  mov cx, MAX_DIRS
-  mov di, dir_used
-  xor ax, ax
-.clr:
-  stosb
-  loop .clr
-  ; root at index 0
-  mov byte [dir_used+0], 1
-  mov byte [dir_parent+0], 0
-  mov byte [dir_names+0], 0
-  mov byte [current_dir], 0
-  popa
-  ret
-
-; dir_index_to_ptr: IN BL=index -> SI points to name slot
-dir_index_to_ptr:
-  push ax
-  push dx
-  push di
-  xor bh, bh        ; ensure BX=index
-  ; DI = BX*11
-  mov di, bx
-  shl di, 3         ; *8
-  mov ax, bx
-  shl ax, 1         ; *2
-  add di, ax        ; *10
-  add di, bx        ; *11
-  mov si, dir_names
-  add si, di
-  pop di
-  pop dx
-  pop ax
-  ret
-
-; token_to_temp: read one token from DS:SI into temp_name (<=10 chars), CF=1 if ok and non-empty
-token_to_temp:
-  push ax
-  push di
-  mov di, temp_name
-  mov ah, 0         ; len
-.tloop:
-  mov al, [si]
-  cmp al, 0
-  je .tend
-  cmp al, ' '
-  je .tend
-  cmp al, '/'
-  je .tend
-  cmp ah, NAME_LEN-1
-  jae .tend
-  stosb
-  inc si
-  inc ah
-  jmp .tloop
-.tend:
-  mov al, 0
-  stosb
-  cmp ah, 0
-  je .empty
-  stc
-  jmp .done
-.empty:
-  clc
-.done:
-  pop di
-  pop ax
-  ret
-
-; copy_temp_to_dir: IN BL=index; copy temp_name into dir_names[BL]
-copy_temp_to_dir:
-  push si
-  push di
-  call dir_index_to_ptr
-  mov di, si
-  mov si, temp_name
-.cp:
-  lodsb
-  stosb
-  test al, al
-  jnz .cp
-  pop di
-  pop si
-  ret
-
-; find_child: IN BL=parent index, SI->temp_name; OUT AL=index, CF=1 if found
-find_child:
-  push bx
-  push cx
-  push si
-  mov ah, bl              ; save parent index in AH
-  mov cx, MAX_DIRS-1
-  mov al, 1               ; start from index 1
-.fnext:
-  mov bl, al
-  cmp byte [dir_used+bx], 1
-  jne .fcont
-  cmp byte [dir_parent+bx], ah
-  jne .fcont
-  ; compare names dir_names[bl] with temp_name
-  push ax
-  push bx
-  call dir_index_to_ptr   ; SI -> name
-  mov di, temp_name
-  call streq              ; CF=1 if equal
-  pop bx
-  pop ax
-  jc .found
-.fcont:
-  inc al
-  loop .fnext
-  clc
-  jmp .done
-.found:
-  stc
-.done:
-  pop si
-  pop cx
-  pop bx
-  ret
-
-; has_children: IN BL=index; CF=1 if any child exists
-has_children:
-  push ax
-  push bx
-  push cx
-  mov ch, bl           ; save target parent index in CH
-  mov cx, MAX_DIRS
-  xor ax, ax
-.hn:
-  mov bl, al
-  xor bh, bh
-  cmp byte [dir_used+bx], 1
-  jne .hnc
-  mov dl, [dir_parent+bx]
-  cmp dl, ch
-  je .hyes
-.hnc:
-  inc al
-  loop .hn
-  clc
-  jmp .hout
-.hyes:
-  stc
-.hout:
-  pop cx
-  pop bx
-  pop ax
-  ret
-
-; has_files: IN BL=index; CF=1 if any file exists under this dir
-has_files:
-  push ax
-  push bx
-  push cx
-  mov ch, bl           ; save target parent index in CH
-  mov cx, MAX_FILES
-  xor ax, ax
-.hf_loop:
-  mov bl, al
-  xor bh, bh
-  cmp byte [file_used+bx], 1
-  jne .hf_next
-  mov dl, [file_parent+bx]
-  cmp dl, ch
-  je .hf_yes
-.hf_next:
-  inc al
-  loop .hf_loop
-  clc
-  jmp .hf_out
-.hf_yes:
-  stc
-.hf_out:
-  pop cx
-  pop bx
-  pop ax
-  ret
-
-; alloc_dir: find free slot (>=1). OUT AL=index, CF=1 if found
-alloc_dir:
-  push cx
-  mov cx, MAX_DIRS-1
-  mov al, 1
-.an:
-  mov bl, al
-  cmp byte [dir_used+bx], 0
-  je .got
-  inc al
-  loop .an
-  clc
-  pop cx
-  ret
-.got:
-  stc
-  pop cx
-  ret
-
-; print_pwd: prints current path (root or /name)
-print_pwd:
-  pusha
-  mov al, [current_dir]
-  cmp al, 0
-  je .only_root
-  ; Build stack of indices from current up to root (exclude 0)
-  mov byte [pwd_depth], 0   ; depth = 0
-.pw_acc:
-  mov bl, al
-  push bx              ; push index
-  inc byte [pwd_depth] ; depth++
-  mov al, [dir_parent+bx]
-  cmp al, 0
-  jne .pw_acc
-  ; Print "/name" for each element from root downward
-.pw_print:
-  mov al, [pwd_depth]
-  cmp al, 0
-  je .done
-  dec byte [pwd_depth]
-  pop bx               ; BX = index
-  ; print '/'
-  mov ah, 0x0E
-  mov bh, 0x00
-  mov dl, bl           ; save BL=index in DL before clobbering BL
-  mov bl, [text_attr]
-  mov al, '/'
-  int 0x10
-  ; print name
-  mov bl, dl           ; restore BL=index
-  call dir_index_to_ptr
+  mov si, msg_box_empty
   call puts_raw
-  ; BL already restored
-  jmp .pw_print
-.only_root:
-  mov si, slash
+  mov ah, 0x02
+  mov dx, (11<<8) | 16
+  int 0x10
+  mov si, msg_box_empty
+  call puts_raw
+  mov ah, 0x02
+  mov dx, (12<<8) | 16
+  int 0x10
+  mov si, msg_box_empty
+  call puts_raw
+  mov ah, 0x02
+  mov dx, (13<<8) | 16
+  int 0x10
+  mov si, msg_box_bottom
+  call puts_raw
+  ; Items inside box at fixed columns
+  ; BIOS row 11, start col 18
+  mov ah, 0x02
+  mov bh, 0x00
+  mov dx, (11<<8) | 18
+  int 0x10
+  mov al, [menu_sel]
+  cmp al, 0
+  jne .bios_norm
+  push ax
+  mov al, [text_attr]
+  push ax
+  mov byte [text_attr], 0x70 ; inverse highlight
+  mov si, msg_item_bios_sel
+  call puts_raw
+  pop ax
+  mov [text_attr], al
+  pop ax
+  jmp .after_bios
+.bios_norm:
+  mov si, msg_item_bios
+  call puts_raw
+.after_bios:
+  ; BOOT row 12, start col 18
+  mov ah, 0x02
+  mov bh, 0x00
+  mov dx, (12<<8) | 18
+  int 0x10
+  mov al, [menu_sel]
+  cmp al, 1
+  jne .boot_norm
+  push ax
+  mov al, [text_attr]
+  push ax
+  mov byte [text_attr], 0x70
+  mov si, msg_item_boot_sel
+  call puts_raw
+  pop ax
+  mov [text_attr], al
+  pop ax
+  jmp .after_boot
+.boot_norm:
+  mov si, msg_item_boot
+  call puts_raw
+.after_boot:
+  ; Boot options line (static placeholder)
+  mov ah, 0x02
+  mov bh, 0x00
+  mov dx, (19<<8) | 10
+  int 0x10
+  mov si, msg_boot_opts
+  call puts_raw
+  mov si, msg_boot_opts_value
   call puts
-  popa
-  ret
-.done:
-  ; end line
-  call clear_eol
-  call newline
-  popa
-  ret
-
-; list_children: list names under current_dir, or (empty)
-list_children:
-  pusha
-  mov dl, [current_dir]
-  mov al, 1
-.lnext:
-  cmp al, MAX_DIRS
-  jae .lend
-  mov bl, al
-  xor bh, bh
-  cmp byte [dir_used+bx], 1
-  jne .skip
-  cmp byte [dir_parent+bx], dl
-  jne .skip
-  call dir_index_to_ptr
-  ; print name with '/' suffix for directories
-  call puts_raw
-  ; print '/'
-  mov ah, 0x0E
+  ; Footer hints
+  mov ah, 0x02
   mov bh, 0x00
-  mov bl, [text_attr]
-  mov al, '/'
+  mov dx, (23<<8) | 6
   int 0x10
-  ; finish line
-  call clear_eol
-  call newline
-  ; mark that something was printed and count
-  mov byte [ls_printed], 1
-  inc byte [dir_count]
-.skip:
-  inc al
-  jmp .lnext
-.lend:
+  mov si, msg_menu_hint
+  call puts_raw
   popa
   ret
 
-; list_files: list file names under current_dir, or nothing if none
-list_files:
+show_loading_and_wait:
   pusha
-  mov dl, [current_dir]
-  mov al, 0
-.lf_next:
-  cmp al, MAX_FILES
-  jae .lf_end
-  mov bl, al
-  xor bh, bh
-  cmp byte [file_used+bx], 1
-  jne .lf_skip
-  cmp byte [file_parent+bx], dl
-  jne .lf_skip
-  ; print name (prefix with nothing for now)
-  call file_index_to_ptr
+  call cls
+  mov si, msg_loading
   call puts
-  ; mark that something was printed
-  mov byte [ls_printed], 1
-  inc byte [file_count]
-.lf_skip:
-  inc al
-  jmp .lf_next
-.lf_end:
+  call wait_5s
+  call cls
   popa
   ret
- 
-; file_index_to_ptr: IN BL=index -> SI points to file name slot
-file_index_to_ptr:
-  push ax
-  push dx
-  push di
-  xor bh, bh
-  mov di, bx
-  shl di, 3         ; *8
-  mov ax, bx
-  shl ax, 1         ; *2
-  add di, ax        ; *10
-  add di, bx        ; *11
-  mov si, file_names
-  add si, di
-  pop di
-  pop dx
-  pop ax
-  ret
-
-; copy_temp_to_file: IN BL=index; copy temp_name into file_names[BL]
-copy_temp_to_file:
-  push si
-  push di
-  call file_index_to_ptr
-  mov di, si
-  mov si, temp_name
-.cf_cp:
-  lodsb
-  stosb
-  test al, al
-  jnz .cf_cp
-  pop di
-  pop si
-  ret
-
-; find_file_child: IN BL=parent index, SI->temp_name; OUT AL=index, CF=1 if found
-find_file_child:
-  push bx
-  push cx
-  push si
-  mov ah, bl              ; parent
-  mov cx, MAX_FILES
-  xor al, al
-.ffn:
-  cmp al, MAX_FILES
-  jae .ff_done
-  mov bl, al
-  cmp byte [file_used+bx], 1
-  jne .ff_cont
-  cmp byte [file_parent+bx], ah
-  jne .ff_cont
-  push ax
-  push bx
-  call file_index_to_ptr
-  mov di, temp_name
-  call streq
-  pop bx
-  pop ax
-  jc .ff_found
-.ff_cont:
-  inc al
-  loop .ffn
-  clc
-  jmp .ff_done2
-.ff_found:
-  stc
-.ff_done2:
-  pop si
-  pop cx
-  pop bx
-  ret
-.ff_done:
-  clc
-  jmp .ff_done2
-
-; alloc_file: find free file slot
-alloc_file:
-  push cx
-  mov cx, MAX_FILES
-  xor al, al
-.af_loop:
-  cmp al, MAX_FILES
-  jae .af_none
-  mov bl, al
-  cmp byte [file_used+bx], 0
-  je .af_got
-  inc al
-  loop .af_loop
-.af_none:
-  clc
-  pop cx
-  ret
-.af_got:
-  stc
-  pop cx
-  ret
-
-; file_data_ptr: IN BL=index -> SI points to start of content buffer
-file_data_ptr:
-  push ax
-  push dx
-  push di
-  xor bh, bh
-  mov di, bx
-  ; DI = BX * FILE_CONTENT_SIZE
-  ; For 64 bytes size, multiply by 64 = shift left 6
-  shl di, 6
-  mov si, file_data
-  add si, di
-  pop di
-  pop dx
-  pop ax
-  ret
-; hex_nibble: input BL=char, output AL=nibble, CF=1 ok
-hex_nibble:
-  push bx
-  mov al, bl
-  ; '0'-'9'
-  cmp al, '0'
-  jb .tryA
-  cmp al, '9'
-  jg .tryA
-  sub al, '0'
-  stc
-  jmp .hx_out
-.tryA:
-  ; 'A'-'F'
-  cmp al, 'A'
-  jb .trya
-  cmp al, 'F'
-  jg .trya
-  sub al, 'A'
-  add al, 10
-  stc
-  jmp .hx_out
-.trya:
-  ; 'a'-'f'
-  cmp al, 'a'
-  jb .bad
-  cmp al, 'f'
-  jg .bad
-  sub al, 'a'
-  add al, 10
-  stc
-  jmp .hx_out
-.bad:
-  clc
-.hx_out:
-  pop bx
-  ret
-
-; ----------------------------------------
-; Data
-; ----------------------------------------
-CMD_BUF_SIZE equ 128
-STARTUP_CYCLES    equ 3     ; number of dot cycles (increase to slow down)
-STARTUP_DOT_TICKS equ 6     ; ticks per dot (~55ms each tick) -> ~330ms
-
-msg_startup db "LockinOS starting",0
-msg_banner db "LockinOS shell ready.Type 'help'",0
-msg_prompt db "> ",0
-msg_unknown db "Unknown command.Type 'help'",0
-
-cmd_buffer times CMD_BUF_SIZE db 0
-
-cmd_help   db "help",0
-cmd_whoami db "whoami",0
-cmd_date   db "date",0
-cmd_uptime db "uptime",0
-cmd_about  db "about",0
-cmd_beep   db "beep",0
-cmd_clear  db "clear",0
-cmd_halt   db "halt",0
-cmd_reboot db "reboot",0
-cmd_shutdown db "shutdown",0
-cmd_restart  db "restart",0
-cmd_echo   db "echo ",0
-cmd_color  db "color ",0
-cmd_write  db "write ",0
-
-msg_help db "Commands:",0
-         db  "  help       - show this help",0
-         db  "  whoami     - current user",0
-         db  "  date       - current date/time",0
-         db  "  uptime     - time since boot (sec)",0
-         db  "  about      - about LockinOS",0
-         db  "  beep       - beep (bell)",0
-         db  "  echo X     - print X",0
-         db  "  color XY   - set text attr hex (e.g. 1E)",0
-         db  "  pwd        - show current directory",0
-         db  "  ls         - list items",0
-         db  "  cd NAME    - change directory (.. or /)",0
-         db  "  mkdir NAME - create directory",0
-         db  "  rmdir NAME - remove empty directory",0
-         db  "  touch NAME - create empty file",0
-         db  "  rm NAME    - remove file",0
-         db  "  cat NAME   - print file contents",0
-         db  "  write NAME TEXT - create/overwrite file with TEXT",0
-         db  "  clear      - clear screen",0
-         db  "  shutdown   - shut down (halt)",0
-         db  "  restart    - reboot",0
-         db  "  halt       - halt CPU",0
-         db  "  reboot     - reboot",0
-         db  0
-
-; state/config
-text_attr db 0x07
-msg_about db "LockinOS: Minimal 16-bit real-mode OS (V1.0.0)",0
-empty db "",0
-boot_ticks_lo dw 0
-boot_ticks_hi dw 0
-cmdptr dw 0
-rl_start dw 0
-msg_color_usage db "Usage: color XY  (X=bg,Y=fg hex, e.g. 1E)",0
-msg_color_set db "Color set.",0
-msg_user_prefix db "User ",0
-username db "root",0
-msg_uptime db "Uptime: ",0
-letter_s db "s",0
-dash db "-",0
-colon db ":",0
-space db " ",0
-lparen db "(",0
-rparen db ")",0
-
-; RTC temp storage (BCD fields)
-rtc_century db 0
-rtc_year    db 0
-rtc_month   db 0
-rtc_day     db 0
-rtc_hour    db 0
-rtc_min     db 0
-rtc_sec     db 0
-
-; File/Dir command tokens
-cmd_pwd   db "pwd",0
-cmd_ls    db "ls",0
-cmd_cd    db "cd ",0
-cmd_mkdir db "mkdir ",0
-cmd_rmdir db "rmdir ",0
-cmd_touch db "touch ",0
-cmd_rm    db "rm ",0
-cmd_cat   db "cat ",0
 
 ; Messages for directory actions
 msg_ok db "OK",0
@@ -1903,3 +881,622 @@ file_count db 0
 ; totals labels for ls
 msg_totals_dirs db " dirs, ",0
 msg_totals_files db " files",0
+
+; generic message
+msg_not_impl db "(not implemented)",0
+
+; =============================
+; Minimal kernel support layer
+; =============================
+
+; --- global text attribute (foreground on black) ---
+text_attr db 0x07
+
+; --- general strings ---
+crlf db 13,10,0
+dash db "-",0
+colon db ":",0
+space db " ",0
+empty db "",0
+
+; --- banner and prompt ---
+msg_banner db "LockinOS starting...",0
+msg_prompt db "> ",0
+msg_unknown db "Unknown command",0
+msg_halt db "System halted.",0
+msg_reboot db "Rebooting...",0
+
+; --- boot timing ---
+boot_ticks_lo dw 0
+boot_ticks_hi dw 0
+
+; --- command buffers and pointers ---
+cmd_buffer times CMD_BUF_SIZE db 0
+cmdptr dw 0
+
+; --- RTC scratch ---
+rtc_century db 0
+rtc_year    db 0
+rtc_month   db 0
+rtc_day     db 0
+rtc_hour    db 0
+rtc_min     db 0
+rtc_sec     db 0
+
+; --- user info ---
+msg_user_prefix db "User: ",0
+username db "user",0
+
+; --- help text ---
+msg_help db "LockinOS shell (minimal build)",13,10
+         db "Available commands:",13,10
+         db "  help      - show this help",13,10
+         db "  whoami    - show current user",13,10
+         db "  date      - show RTC date/time",13,10
+         db "  echo TEXT - print TEXT",13,10
+         db "  clear     - clear screen",13,10
+         db "  beep      - beep once",13,10
+         db "  reboot    - reboot via BIOS",13,10
+         db "  halt      - halt CPU",0
+
+; --- menu state and strings ---
+menu_sel db 0
+msg_menu_title db "  Lockin OS Boot Menu  ",0
+msg_box_top    db "+--------------------------+",0
+msg_box_empty  db "|                          |",0
+msg_box_bottom db "+--------------------------+",0
+msg_item_bios      db "  Bios",0
+msg_item_bios_sel  db "[ Bios ]",0
+msg_item_boot      db "  Boot",0
+msg_item_boot_sel  db "[ Boot ]",0
+msg_boot_opts      db "Boot Options: ",0
+msg_boot_opts_value db "(none)",0
+msg_menu_hint db "Enter=Select  Up/Down=Move   I=Bios  B=Boot  ESC=Boot",0
+
+; =============================
+; Basic console routines
+; =============================
+
+cls:
+  pusha
+  mov ax, 0x0600
+  mov bh, [text_attr]
+  xor cx, cx
+  mov dx, 0x184F
+  int 0x10
+  mov ah, 0x02
+  xor dx, dx
+  int 0x10
+  popa
+  ret
+
+puts_raw: ; SI -> 0-terminated string
+  pusha
+.next:
+  lodsb
+  test al, al
+  jz .done
+  mov ah, 0x0E
+  mov bh, 0x00
+  mov bl, [text_attr]
+  int 0x10
+  jmp .next
+.done:
+  popa
+  ret
+
+puts: ; SI -> 0-terminated, then newline
+  call puts_raw
+  mov si, crlf
+  call puts_raw
+  ret
+
+puts_lines:
+  ; minimal: same as puts
+  jmp puts
+
+ensure_col0:
+  ; set cursor to column 0 of current row
+  pusha
+  mov ah, 0x03      ; get cursor pos
+  mov bh, 0x00
+  int 0x10          ; returns DH=row, DL=col
+  xor dl, dl        ; col = 0
+  mov ah, 0x02
+  mov bh, 0x00
+  int 0x10
+  popa
+  ret
+
+readline: ; DI=dest, CX=max
+  pusha
+  mov bx, di        ; BX = start
+  dec cx            ; leave room for 0
+.rl_wait:
+  xor ax, ax
+  int 0x16          ; wait key
+  cmp al, 13        ; Enter
+  je .rl_done
+  cmp al, 8         ; Backspace
+  jne .rl_char
+  cmp di, bx        ; at start?
+  je .rl_wait
+  dec di
+  inc cx
+  ; erase on screen: BS, space, BS
+  mov ah, 0x0E
+  mov bh, 0x00
+  mov bl, [text_attr]
+  mov al, 8
+  int 0x10
+  mov al, ' '
+  int 0x10
+  mov al, 8
+  int 0x10
+  jmp .rl_wait
+.rl_char:
+  cmp cx, 0
+  je .rl_wait       ; ignore when buffer full
+  stosb             ; store AL
+  dec cx
+  ; echo
+  mov ah, 0x0E
+  mov bh, 0x00
+  mov bl, [text_attr]
+  int 0x10
+  jmp .rl_wait
+.rl_done:
+  mov byte [di], 0
+  popa
+  ret
+
+skip_spaces: ; SI -> skip space chars (updates SI)
+.ss_loop:
+  mov al, [si]
+  cmp al, ' '
+  jne .ss_done
+  inc si
+  jmp .ss_loop
+.ss_done:
+  ret
+
+; streq_ci: compare SI and DI case-insensitive; CF=1 if equal
+streq_ci:
+  push ax
+  push bx
+.ci_loop:
+  mov al, [si]
+  mov bl, [di]
+  ; to upper AL
+  cmp al, 'a'
+  jb .al_ok
+  cmp al, 'z'
+  ja .al_ok
+  sub al, 32
+.al_ok:
+  ; to upper BL
+  cmp bl, 'a'
+  jb .bl_ok
+  cmp bl, 'z'
+  ja .bl_ok
+  sub bl, 32
+.bl_ok:
+  cmp al, bl
+  jne .ci_ne
+  cmp al, 0
+  je .ci_eq
+  inc si
+  inc di
+  jmp .ci_loop
+.ci_eq:
+  stc
+  pop bx
+  pop ax
+  ret
+.ci_ne:
+  clc
+  pop bx
+  pop ax
+  ret
+
+; strncasecmp_ci: compare up to CX chars case-insensitive; CF=1 if first CX match
+strncasecmp_ci:
+  push ax
+  push bx
+.nci_loop:
+  cmp cx, 0
+  je .nci_eq
+  mov al, [si]
+  mov bl, [di]
+  ; to upper AL
+  cmp al, 'a'
+  jb .nci_al_ok
+  cmp al, 'z'
+  ja .nci_al_ok
+  sub al, 32
+.nci_al_ok:
+  ; to upper BL
+  cmp bl, 'a'
+  jb .nci_bl_ok
+  cmp bl, 'z'
+  ja .nci_bl_ok
+  sub bl, 32
+.nci_bl_ok:
+  cmp al, bl
+  jne .nci_ne
+  inc si
+  inc di
+  dec cx
+  jmp .nci_loop
+.nci_eq:
+  stc
+  pop bx
+  pop ax
+  ret
+.nci_ne:
+  clc
+  pop bx
+  pop ax
+  ret
+
+; streq: case-sensitive equality; CF=1 if equal
+streq:
+  push ax
+.cs_loop:
+  mov al, [si]
+  cmp al, [di]
+  jne .cs_ne
+  cmp al, 0
+  je .cs_eq
+  inc si
+  inc di
+  jmp .cs_loop
+.cs_eq:
+  stc
+  pop ax
+  ret
+.cs_ne:
+  clc
+  pop ax
+  ret
+
+; Print AX as unsigned decimal
+print_uint16:
+  pusha
+  mov bx, 10
+  mov cx, 0           ; count
+  mov dx, 0
+  mov si, numbuf+5    ; end of buffer
+.pu_loop:
+  xor dx, dx
+  div bx              ; AX /= 10, remainder in DX
+  add dl, '0'
+  dec si
+  mov [si], dl
+  inc cx
+  test ax, ax
+  jnz .pu_loop
+  ; output CX digits at SI
+.pu_out:
+  lodsb
+  mov ah, 0x0E
+  mov bh, 0x00
+  mov bl, [text_attr]
+  int 0x10
+  loop .pu_out
+  popa
+  ret
+
+; Print AL as two BCD digits
+print_bcd2:
+  pusha
+  mov ah, al
+  and ah, 0x0F       ; low nibble
+  mov bl, al
+  and bl, 0xF0       ; high nibble
+  shr bl, 4
+  add bl, '0'
+  mov al, bl
+  mov ah, 0x0E
+  mov bh, 0x00
+  mov bl, [text_attr]
+  int 0x10
+  mov al, ah
+  add al, '0'
+  mov ah, 0x0E
+  mov bh, 0x00
+  mov bl, [text_attr]
+  int 0x10
+  popa
+  ret
+
+; =============================
+; Minimal FS/dir stubs (no-op)
+; =============================
+
+dirs_init: ret
+find_child: clc 
+  ret
+find_file_child: clc 
+  ret
+alloc_file: clc 
+  ret
+copy_temp_to_file: ret
+alloc_dir: clc 
+  ret
+copy_temp_to_dir: ret
+dir_index_to_ptr: ret
+has_children: clc 
+  ret
+has_files: clc 
+  ret
+list_children: ret
+list_files: ret
+file_data_ptr: ret
+print_pwd: ret
+token_to_temp:
+  stc
+  ret
+; numeric buffer for print_uint16 (max 5 digits)
+numbuf times 6 db 0
+
+; =============================
+; Splash, waits, boot menu, BIOS screen
+; =============================
+
+show_startup:
+  pusha
+  mov si, msg_banner
+  call puts_raw
+  mov bp, STARTUP_CYCLES
+.cycle:
+  mov cx, 3
+.appear:
+  mov ah, 0x0E
+  mov bh, 0x00
+  mov bl, [text_attr]
+  mov al, '.'
+  int 0x10
+  mov al, STARTUP_DOT_TICKS
+  call wait_ticks
+  loop .appear
+  mov cx, 3
+.erase:
+  mov ah, 0x0E
+  mov al, 8
+  mov bh, 0x00
+  mov bl, [text_attr]
+  int 0x10
+  mov al, ' '
+  int 0x10
+  mov al, 8
+  int 0x10
+  mov al, STARTUP_DOT_TICKS
+  call wait_ticks
+  loop .erase
+  dec bp
+  jnz .cycle
+  call wait_5s
+  call cls
+  popa
+  ret
+
+; Wait AL ticks (~55 ms each)
+wait_ticks:
+  pusha
+  xor ah, ah
+  int 0x1A            ; CX:DX = ticks
+  add dx, ax          ; add AL ticks (AH is 0)
+.wt_loop:
+  int 0x1A
+  cmp dx, ax          ; compare low word only
+  jb .wt_loop
+  popa
+  ret
+
+wait_5s:
+  push ax
+  push bx
+  push cx
+  push dx
+  mov ah, 0x86
+  mov cx, 0x004C
+  mov dx, 0x4B40
+  int 0x15
+  jc .fallback
+  pop dx
+  pop cx
+  pop bx
+  pop ax
+  ret
+.fallback:
+  mov al, 91
+  call wait_ticks
+  pop dx
+  pop cx
+  pop bx
+  pop ax
+  ret
+
+show_boot_menu:
+  pusha
+  mov byte [menu_sel], 0
+.redraw:
+  call draw_menu
+.keyloop:
+  xor ax, ax
+  int 0x16
+  cmp al, 13
+  je .enter
+  cmp al, 27
+  je .esc
+  cmp al, 'b'
+  je .do_boot
+  cmp al, 'B'
+  je .do_boot
+  cmp al, 'i'
+  je .do_bios
+  cmp al, 'I'
+  je .do_bios
+  cmp al, 0
+  jne .keyloop
+  cmp ah, 0x48
+  jne .chk_down
+  mov bl, [menu_sel]
+  dec bl
+  and bl, 1
+  mov [menu_sel], bl
+  jmp .redraw
+.chk_down:
+  cmp ah, 0x50
+  jne .keyloop
+  mov bl, [menu_sel]
+  inc bl
+  and bl, 1
+  mov [menu_sel], bl
+  jmp .redraw
+.enter:
+  cmp byte [menu_sel], 0
+  je .do_bios
+  jmp .do_boot
+.esc:
+  jmp .do_boot
+.do_bios:
+  call bios_screen
+  jmp .redraw
+.do_boot:
+  call show_loading_and_wait
+  popa
+  ret
+
+bios_screen:
+  pusha
+  ; set text_attr to blue bg, bright white
+  push ax
+  mov al, [text_attr]
+  push ax
+  mov byte [text_attr], 0x1F
+  call cls
+  ; header
+  mov ah, 0x02
+  mov bh, 0x00
+  mov dx, (1<<8) | 2
+  int 0x10
+  mov si, msg_bios_title
+  call puts
+  ; conventional memory
+  mov ah, 0x02
+  mov dx, (3<<8) | 4
+  int 0x10
+  mov si, msg_mem
+  call puts_raw
+  int 0x12             ; AX = KB of conventional memory
+  call print_uint16
+  mov si, msg_kb
+  call puts
+  ; date/time
+  mov ah, 0x02
+  mov dx, (5<<8) | 4
+  int 0x10
+  mov si, msg_date
+  call puts_raw
+  ; read RTC date/time (robust)
+.rtc_retry:
+  mov ah, 0x04
+  int 0x1A
+  jc .rtc_retry
+  mov [rtc_century], ch
+  mov [rtc_year], cl
+  mov [rtc_month], dh
+  mov [rtc_day], dl
+  mov ah, 0x02
+  int 0x1A
+  jc .rtc_retry
+  mov [rtc_hour], ch
+  mov [rtc_min], cl
+  mov [rtc_sec], dh
+  ; print YYYY-MM-DD
+  mov al, [rtc_century]
+  call print_bcd2
+  mov al, [rtc_year]
+  call print_bcd2
+  mov si, dash
+  call puts_raw
+  mov al, [rtc_month]
+  call print_bcd2
+  mov si, dash
+  call puts_raw
+  mov al, [rtc_day]
+  call print_bcd2
+  ; time line
+  mov ah, 0x02
+  mov dx, (6<<8) | 4
+  int 0x10
+  mov si, msg_time
+  call puts_raw
+  mov al, [rtc_hour]
+  call print_bcd2
+  mov si, colon
+  call puts_raw
+  mov al, [rtc_min]
+  call print_bcd2
+  mov si, colon
+  call puts_raw
+  mov al, [rtc_sec]
+  call print_bcd2
+  mov si, empty
+  call puts
+  ; OS info
+  mov ah, 0x02
+  mov dx, (8<<8) | 4
+  int 0x10
+  mov si, msg_os
+  call puts
+  ; footer/hints
+  mov ah, 0x02
+  mov dx, (22<<8) | 2
+  int 0x10
+  mov si, msg_menu_hint
+  call puts
+  ; wait for ESC
+.wait:
+  xor ax, ax
+  int 0x16
+  cmp al, 27
+  jne .wait
+  pop ax
+  mov [text_attr], al
+  popa
+  ret
+
+; --- command strings to satisfy references ---
+msg_loading db "Loading...",0
+msg_loaded db "Loaded successfully. Type 'help'",0
+msg_bios_title db "LockinOS BIOS Information",0
+msg_mem db "Conventional memory: ",0
+msg_kb db " KB",0
+msg_date db "Date: ",0
+msg_time db "Time: ",0
+msg_os db "OS: LockinOS (minimal build)",0
+cmd_help db "help",0
+cmd_whoami db "whoami",0
+cmd_date db "date",0
+cmd_uptime db "uptime",0
+cmd_about db "about",0
+cmd_beep db "beep",0
+cmd_clear db "clear",0
+cmd_halt db "halt",0
+cmd_shutdown db "shutdown",0
+cmd_reboot db "reboot",0
+cmd_restart db "restart",0
+cmd_echo db "echo ",0
+cmd_color db "color ",0
+cmd_pwd db "pwd",0
+cmd_ls db "ls",0
+cmd_cd db "cd ",0
+cmd_mkdir db "mkdir ",0
+cmd_rmdir db "rmdir ",0
+cmd_touch db "touch ",0
+cmd_rm db "rm ",0
+cmd_cat db "cat ",0
+cmd_write db "write ",0
